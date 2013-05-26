@@ -7,25 +7,19 @@
 require 'base64'
 require 'digest/md5'
 require 'digest/sha1'
-require 'net/http'
+require 'set'
 require 'stringio'
 require 'uri'
 
 module WebSocket
-  class Protocol
+  autoload :HTTP, File.expand_path('../http', __FILE__)
 
-    root = File.expand_path('../protocol', __FILE__)
+  class Driver
+
+    root = File.expand_path('../driver', __FILE__)
     require root + '/../../websocket_mask'
 
-    def self.jruby?
-      defined?(RUBY_ENGINE) && RUBY_ENGINE == 'jruby'
-    end
-
-    def self.rbx?
-      defined?(RUBY_ENGINE) && RUBY_ENGINE == 'rbx'
-    end
-
-    if jruby?
+    if RUBY_PLATFORM =~ /java/
       require 'jruby'
       com.jcoglan.websocket.WebsocketMaskService.new.basicLoad(JRuby.runtime)
     end
@@ -43,20 +37,30 @@ module WebSocket
 
     STATES = [:connecting, :open, :closing, :closed]
 
-    class OpenEvent < Struct.new(nil) ; end
+    class ConnectEvent < Struct.new(nil) ; end
+    class OpenEvent    < Struct.new(nil) ; end
     class MessageEvent < Struct.new(:data) ; end
-    class CloseEvent < Struct.new(:code, :reason) ; end
+    class CloseEvent   < Struct.new(:code, :reason) ; end
 
-    autoload :Draft75, root + '/draft75'
-    autoload :Draft76, root + '/draft76'
-    autoload :Hybi,    root + '/hybi'
-    autoload :Client,  root + '/client'
+    class ProtocolError < StandardError ; end
 
+    autoload :Client,       root + '/client'
+    autoload :Draft75,      root + '/draft75'
+    autoload :Draft76,      root + '/draft76'
+    autoload :EventEmitter, root + '/event_emitter'
+    autoload :Headers,      root + '/headers'
+    autoload :Hybi,         root + '/hybi'
+    autoload :Server,       root + '/server'
+
+    include EventEmitter
     attr_reader :protocol, :ready_state
 
     def initialize(socket, options = {})
+      super()
+
       @socket      = socket
       @options     = options
+      @headers     = Headers.new
       @queue       = []
       @ready_state = 0
     end
@@ -64,6 +68,12 @@ module WebSocket
     def state
       return nil unless @ready_state >= 0
       STATES[@ready_state]
+    end
+
+    def set_header(name, value)
+      return false unless @ready_state <= 0
+      @headers[name] = value
+      true
     end
 
     def start
@@ -88,28 +98,8 @@ module WebSocket
     def close(reason = nil, code = nil)
       return false unless @ready_state == 1
       @ready_state = 3
-      dispatch(:onclose, CloseEvent.new(nil, nil))
+      emit(:close, CloseEvent.new(nil, nil))
       true
-    end
-
-    def onopen(&block)
-      @onopen = block if block_given?
-      @onopen
-    end
-
-    def onmessage(&block)
-      @onmessage = block if block_given?
-      @onmessage
-    end
-
-    def onerror(&block)
-      @onerror = block if block_given?
-      @onerror
-    end
-
-    def onclose(&block)
-      @onclose = block if block_given?
-      @onclose
     end
 
   private
@@ -118,12 +108,7 @@ module WebSocket
       @ready_state = 1
       @queue.each { |message| frame(*message) }
       @queue = []
-      dispatch(:onopen, OpenEvent.new)
-    end
-
-    def dispatch(name, event)
-      handler = __send__(name)
-      handler.call(event) if handler
+      emit(:open, OpenEvent.new)
     end
 
     def queue(message)
@@ -141,6 +126,10 @@ module WebSocket
 
     def self.client(socket, options = {})
       Client.new(socket, options.merge(:masking => true))
+    end
+
+    def self.server(socket, options = {})
+      Server.new(socket, options.merge(:require_masking => true))
     end
 
     def self.rack(socket, options = {})
@@ -171,6 +160,7 @@ module WebSocket
     end
 
     def self.websocket?(env)
+      return false unless env['REQUEST_METHOD'] == 'GET'
       connection = env['HTTP_CONNECTION'] || ''
       upgrade    = env['HTTP_UPGRADE']    || ''
 

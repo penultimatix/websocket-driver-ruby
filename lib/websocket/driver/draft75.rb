@@ -1,7 +1,7 @@
 module WebSocket
-  class Protocol
+  class Driver
 
-    class Draft75 < Protocol
+    class Draft75 < Driver
       def initialize(socket, options = {})
         super
         @stage = 0
@@ -17,7 +17,7 @@ module WebSocket
         buffer.each do |data|
           case @stage
             when -1 then
-              @head << data
+              @body << data
               send_handshake_body
 
             when 0 then
@@ -29,25 +29,26 @@ module WebSocket
 
               if @closing and @length.zero?
                 @ready_state = 3
-                dispatch(:onclose, CloseEvent.new(nil, nil))
+                emit(:close, CloseEvent.new(nil, nil))
               elsif (0x80 & data) != 0x80
                 if @length.zero?
-                  dispatch(:onmessage, MessageEvent.new(''))
                   @stage = 0
                 else
-                  @buffer = []
+                  @skipped = 0
                   @stage = 2
                 end
               end
 
             when 2 then
               if data == 0xFF
-                dispatch(:onmessage, MessageEvent.new(Protocol.encode(@buffer)))
+                emit(:message, MessageEvent.new(Driver.encode(@buffer)))
                 @stage = 0
               else
-                @buffer << data
-                if @length and @buffer.size == @length
-                  @stage = 0
+                if @length
+                  @skipped += 1
+                  @stage = 0 if @skipped == @length
+                else
+                  @buffer << data
                 end
               end
           end
@@ -56,8 +57,8 @@ module WebSocket
 
       def frame(data, type = nil, error_type = nil)
         return queue([data, type, error_type]) if @ready_state == 0
-        data = Protocol.encode(data)
-        frame = ["\x00", data, "\xFF"].map(&Protocol.method(:encode)) * ''
+        data = Driver.encode(data)
+        frame = ["\x00", data, "\xFF"].map(&Driver.method(:encode)) * ''
         @socket.write(frame)
         true
       end
@@ -70,6 +71,7 @@ module WebSocket
         upgrade << "Connection: Upgrade\r\n"
         upgrade << "WebSocket-Origin: #{@socket.env['HTTP_ORIGIN']}\r\n"
         upgrade << "WebSocket-Location: #{@socket.url}\r\n"
+        upgrade << @headers.to_s
         upgrade << "\r\n"
         upgrade
       end
@@ -77,11 +79,12 @@ module WebSocket
       def parse_leading_byte(data)
         if (0x80 & data) == 0x80
           @length = 0
-          @stage = 1
+          @stage  = 1
         else
-          @length = nil
-          @buffer = []
-          @stage = 2
+          @length  = nil
+          @skipped = nil
+          @buffer  = []
+          @stage   = 2
         end
       end
     end
