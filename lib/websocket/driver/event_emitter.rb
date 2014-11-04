@@ -27,17 +27,20 @@ module WebSocket
       end
 
       def emit(event, *args)
-        @listeners[event.to_s].each do |listener|
+        @listeners[event.to_s].dup.each do |listener|
           listener.call(*args)
         end
       end
 
       def listener_count(event)
-        list = @listeners[event.to_s]
-        list && list.size
+        return 0 unless @listeners.has_key?(event.to_s)
+        @listeners[event.to_s].size
+      end
+
+      def listeners(event)
+        @listeners[event.to_s]
       end
     end
 
   end
 end
-

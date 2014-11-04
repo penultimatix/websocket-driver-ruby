@@ -23,13 +23,19 @@ module WebSocket
       end
 
       %w[set_header start state frame text binary ping close].each do |method|
-        define_method(method) do |*args|
+        define_method(method) do |*args, &block|
           if @delegate
-            @delegate.__send__(method, *args)
+            @delegate.__send__(method, *args, &block)
           else
-            @queue << [method, args]
+            @queue << [method, args, block]
             true
           end
+        end
+      end
+
+      %w[protocol version].each do |method|
+        define_method(method) do
+          @delegate && @delegate.__send__(method)
         end
       end
 
@@ -55,14 +61,14 @@ module WebSocket
 
     private
 
-      def fail_request
+      def fail_request(message)
         emit(:error, ProtocolError.new(message))
         emit(:close, CloseEvent.new(Hybi::ERRORS[:protocol_error], message))
       end
 
       def open
-        @queue.each do |message|
-          @delegate.__send__(message[0], *message[1])
+        @queue.each do |method, args, block|
+          @delegate.__send__(method, *args, &block)
         end
         @queue = []
       end
@@ -70,4 +76,3 @@ module WebSocket
 
   end
 end
-

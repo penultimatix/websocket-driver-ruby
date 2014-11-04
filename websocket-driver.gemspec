@@ -1,10 +1,11 @@
 Gem::Specification.new do |s|
   s.name              = 'websocket-driver'
-  s.version           = '0.2.1'
+  s.version           = '0.4.0'
   s.summary           = 'WebSocket protocol handler with pluggable I/O'
   s.author            = 'James Coglan'
   s.email             = 'jcoglan@gmail.com'
   s.homepage          = 'http://github.com/faye/websocket-driver-ruby'
+  s.license           = 'MIT'
 
   s.extra_rdoc_files  = %w[README.md]
   s.rdoc_options      = %w[--main README.md --markup markdown]
@@ -18,13 +19,12 @@ Gem::Specification.new do |s|
     s.platform = 'java'
     files << 'lib/websocket_mask.jar'
   else
-    s.extensions << 'ext/websocket_mask/extconf.rb'
+    s.extensions << 'ext/websocket-driver/extconf.rb'
   end
 
   s.files = files
 
   s.add_development_dependency 'eventmachine'
-  s.add_development_dependency 'rake-compiler'
+  s.add_development_dependency 'rake-compiler', '~> 0.8.0'
   s.add_development_dependency 'rspec'
 end
-

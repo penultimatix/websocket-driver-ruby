@@ -17,7 +17,7 @@ module WebSocket
   class Driver
 
     root = File.expand_path('../driver', __FILE__)
-    require root + '/../../websocket_mask'
+    require 'websocket_mask'
 
     if RUBY_PLATFORM =~ /java/
       require 'jruby'
@@ -35,7 +35,8 @@ module WebSocket
       require root + '/utf8_match'
     end
 
-    STATES = [:connecting, :open, :closing, :closed]
+    MAX_LENGTH = 0x3ffffff
+    STATES     = [:connecting, :open, :closing, :closed]
 
     class ConnectEvent < Struct.new(nil) ; end
     class OpenEvent    < Struct.new(nil) ; end
@@ -60,6 +61,7 @@ module WebSocket
 
       @socket      = socket
       @options     = options
+      @max_length  = options[:max_length] || MAX_LENGTH
       @headers     = Headers.new
       @queue       = []
       @ready_state = 0
@@ -168,7 +170,6 @@ module WebSocket
     end
 
     def self.websocket?(env)
-      return false unless env['REQUEST_METHOD'] == 'GET'
       connection = env['HTTP_CONNECTION'] || ''
       upgrade    = env['HTTP_UPGRADE']    || ''
 
@@ -179,4 +180,3 @@ module WebSocket
 
   end
 end
-

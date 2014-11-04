@@ -52,14 +52,20 @@ module WebSocket
         super
         reset
 
-        @reader    = StreamReader.new
-        @stage     = 0
-        @masking   = options[:masking]
-        @protocols = options[:protocols] || []
-        @protocols = @protocols.strip.split(/\s*,\s*/) if String === @protocols
-
+        @reader          = StreamReader.new
+        @stage           = 0
+        @masking         = options[:masking]
+        @protocols       = options[:protocols] || []
+        @protocols       = @protocols.strip.split(/\s*,\s*/) if String === @protocols
         @require_masking = options[:require_masking]
         @ping_callbacks  = {}
+
+        return unless @socket.respond_to?(:env)
+
+        if protos = @socket.env['HTTP_SEC_WEBSOCKET_PROTOCOL']
+          protos = protos.split(/\s*,\s*/) if String === protos
+          @protocol = protos.find { |p| @protocols.include?(p) }
+        end
       end
 
       def version
@@ -95,9 +101,12 @@ module WebSocket
               buffer = @reader.read(@length)
               if buffer
                 @payload = buffer
-                emit_frame
+                emit_frame(buffer)
                 @stage = 0
               end
+
+            else
+              buffer = nil
           end
         end
       end
@@ -172,17 +181,16 @@ module WebSocket
         reason ||= ''
         code   ||= ERRORS[:normal_closure]
 
-        case @ready_state
-          when 0 then
-            @ready_state = 3
-            emit(:close, CloseEvent.new(code, reason))
-            true
-          when 1 then
-            frame(reason, :close, code)
-            @ready_state = 2
-            true
-          else
-            false
+        if @ready_state <= 0
+          @ready_state = 3
+          emit(:close, CloseEvent.new(code, reason))
+          true
+        elsif @ready_state == 1
+          frame(reason, :close, code)
+          @ready_state = 2
+          true
+        else
+          false
         end
       end
 
@@ -192,25 +200,15 @@ module WebSocket
         sec_key = @socket.env['HTTP_SEC_WEBSOCKET_KEY']
         return '' unless String === sec_key
 
-        accept    = Hybi.generate_accept(sec_key)
-        protos    = @socket.env['HTTP_SEC_WEBSOCKET_PROTOCOL']
-        supported = @protocols
-        proto     = nil
-
         headers = [
           "HTTP/1.1 101 Switching Protocols",
           "Upgrade: websocket",
           "Connection: Upgrade",
-          "Sec-WebSocket-Accept: #{accept}"
+          "Sec-WebSocket-Accept: #{Hybi.generate_accept(sec_key)}"
         ]
 
-        if protos
-          protos = protos.split(/\s*,\s*/) if String === protos
-          proto = protos.find { |p| supported.include?(p) }
-          if proto
-            @protocol = proto
-            headers << "Sec-WebSocket-Protocol: #{proto}"
-          end
+        if @protocol
+          headers << "Sec-WebSocket-Protocol: #{@protocol}"
         end
 
         (headers + [@headers.to_s, '']).join("\r\n")
@@ -219,6 +217,7 @@ module WebSocket
       def shutdown(code, reason)
         frame(reason, :close, code)
         @ready_state = 3
+        @stage = 5
         emit(:close, CloseEvent.new(code, reason))
       end
 
@@ -239,8 +238,6 @@ module WebSocket
 
         @final   = (data & FIN) == FIN
         @opcode  = (data & OPCODE)
-        @mask    = []
-        @payload = []
 
         unless OPCODES.values.include?(@opcode)
           return fail(:protocol_error, "Unrecognized frame opcode: #{@opcode}")
@@ -265,7 +262,8 @@ module WebSocket
 
         @length = (data & LENGTH)
 
-        if @length <= 125
+        if @length >= 0 and @length <= 125
+          return unless check_frame_length
           @stage = @masked ? 3 : 4
         else
           @length_size = (@length == 126) ? 2 : 8
@@ -280,17 +278,32 @@ module WebSocket
           return fail(:protocol_error, "Received control frame having too long payload: #{@length}")
         end
 
+        return unless check_frame_length
+
         @stage  = @masked ? 3 : 4
       end
 
-      def emit_frame
-        payload = @masked ? Mask.mask(@payload, @mask) : @payload
+      def check_frame_length
+        if @buffer.size + @length > @max_length
+          fail(:too_large, 'WebSocket frame length too large')
+          false
+        else
+          true
+        end
+      end
 
-        case @opcode
+      def emit_frame(buffer)
+        payload  = Mask.mask(buffer, @mask)
+        is_final = @final
+        opcode   = @opcode
+
+        @final = @opcode = @length = @length_size = @masked = @mask = nil
+
+        case opcode
           when OPCODES[:continuation] then
             return fail(:protocol_error, 'Received unexpected continuation frame') unless @mode
             @buffer.concat(payload)
-            if @final
+            if is_final
               message = @buffer
               message = Driver.encode(message, :utf8) if @mode == :text
               reset
@@ -302,7 +315,7 @@ module WebSocket
             end
 
           when OPCODES[:text] then
-            if @final
+            if is_final
               message = Driver.encode(payload, :utf8)
               if message
                 emit(:message, MessageEvent.new(message))
@@ -315,7 +328,7 @@ module WebSocket
             end
 
           when OPCODES[:binary] then
-            if @final
+            if is_final
               emit(:message, MessageEvent.new(payload))
             else
               @mode = :binary
@@ -367,4 +380,3 @@ module WebSocket
 
   end
 end
-

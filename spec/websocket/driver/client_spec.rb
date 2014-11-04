@@ -4,9 +4,9 @@ describe WebSocket::Driver::Client do
   include EncodingHelper
 
   let :socket do
-    socket = mock(WebSocket)
-    socket.stub(:write) { |message| @bytes = bytes(message) }
-    socket.stub(:url).and_return("ws://www.example.com/socket")
+    socket = double(WebSocket)
+    allow(socket).to receive(:write) { |message| @bytes = bytes(message) }
+    allow(socket).to receive(:url).and_return(url)
     socket
   end
 
@@ -16,6 +16,10 @@ describe WebSocket::Driver::Client do
 
   let :protocols do
     nil
+  end
+
+  let :url do
+    "ws://www.example.com/socket"
   end
 
   let :driver do
@@ -40,19 +44,27 @@ describe WebSocket::Driver::Client do
   end
 
   before do
-    WebSocket::Driver::Client.stub(:generate_key).and_return(key)
+    allow(WebSocket::Driver::Client).to receive(:generate_key).and_return(key)
     @open = @error = @close = false
     @message = ""
   end
 
   describe "in the beginning state" do
     it "starts in no state" do
-      driver.state.should == nil
+      expect(driver.state).to eq nil
+    end
+
+    describe :close do
+      it "changes the state to :closed" do
+        driver.close
+        expect(driver.state).to eq :closed
+        expect(@close).to eq [1000, ""]
+      end
     end
 
     describe :start do
       it "writes the handshake request to the socket" do
-        socket.should_receive(:write).with(
+        expect(socket).to receive(:write).with(
             "GET /socket HTTP/1.1\r\n" + 
             "Host: www.example.com\r\n" +
             "Upgrade: websocket\r\n" +
@@ -64,14 +76,14 @@ describe WebSocket::Driver::Client do
       end
 
       it "returns true" do
-        driver.start.should == true
+        expect(driver.start).to eq true
       end
 
       describe "with subprotocols" do
         let(:protocols) { ["foo", "bar", "xmpp"] }
 
         it "writes the handshake with Sec-WebSocket-Protocol" do
-          socket.should_receive(:write).with(
+          expect(socket).to receive(:write).with(
               "GET /socket HTTP/1.1\r\n" + 
               "Host: www.example.com\r\n" +
               "Upgrade: websocket\r\n" +
@@ -84,13 +96,30 @@ describe WebSocket::Driver::Client do
         end
       end
 
+      describe "with basic auth" do
+        let(:url) { "ws://user:pass@www.example.com/socket" }
+
+        it "writes the handshake with Sec-WebSocket-Protocol" do
+          expect(socket).to receive(:write).with(
+              "GET /socket HTTP/1.1\r\n" + 
+              "Host: www.example.com\r\n" +
+              "Upgrade: websocket\r\n" +
+              "Connection: Upgrade\r\n" +
+              "Sec-WebSocket-Key: 2vBVWg4Qyk3ZoM/5d3QD9Q==\r\n" +
+              "Sec-WebSocket-Version: 13\r\n" +
+              "Authorization: Basic dXNlcjpwYXNz\r\n" +
+              "\r\n")
+          driver.start
+        end
+      end
+
       describe "with custom headers" do
         before do
           driver.set_header "User-Agent", "Chrome"
         end
 
         it "writes the handshake with custom headers" do
-          socket.should_receive(:write).with(
+          expect(socket).to receive(:write).with(
               "GET /socket HTTP/1.1\r\n" + 
               "Host: www.example.com\r\n" +
               "Upgrade: websocket\r\n" +
@@ -103,9 +132,38 @@ describe WebSocket::Driver::Client do
         end
       end
 
+      describe "using a proxy" do
+        let(:options) { {:proxy => "http://proxy.example.com"} }
+
+        it "sends a CONNECT request to the proxy" do
+          expect(socket).to receive(:write).with(
+              "CONNECT www.example.com:80 HTTP/1.1\r\n" +
+              "Host: www.example.com\r\n" +
+              "Connection: keep-alive\r\n" +
+              "Proxy-Connection: keep-alive\r\n" +
+              "\r\n")
+          driver.start
+        end
+      end
+
+      describe "using an authenticated proxy" do
+        let(:options) { {:proxy => "http://user:pass@proxy.example.com"} }
+
+        it "sends a CONNECT request to the proxy" do
+          expect(socket).to receive(:write).with(
+              "CONNECT www.example.com:80 HTTP/1.1\r\n" +
+              "Host: www.example.com\r\n" +
+              "Connection: keep-alive\r\n" +
+              "Proxy-Connection: keep-alive\r\n" +
+              "Proxy-Authorization: Basic dXNlcjpwYXNz\r\n" +
+              "\r\n")
+          driver.start
+        end
+      end
+
       it "changes the state to :connecting" do
         driver.start
-        driver.state.should == :connecting
+        expect(driver.state).to eq :connecting
       end
     end
   end
@@ -113,21 +171,45 @@ describe WebSocket::Driver::Client do
   describe "in the :connecting state" do
     before { driver.start }
 
+    describe "using a proxy" do
+      let(:options) { {:proxy => "http://proxy.example.com"} }
+
+      it "writes the handshake request when the proxy connects" do
+        expect(socket).to receive(:write).with(
+            "GET /socket HTTP/1.1\r\n" + 
+            "Host: www.example.com\r\n" +
+            "Upgrade: websocket\r\n" +
+            "Connection: Upgrade\r\n" +
+            "Sec-WebSocket-Key: 2vBVWg4Qyk3ZoM/5d3QD9Q==\r\n" +
+            "Sec-WebSocket-Version: 13\r\n" +
+            "\r\n")
+        driver.parse("HTTP/1.1 200 OK\r\n\r\n")
+      end
+
+      it "emits an error if the proxy does not connect" do
+        expect(socket).to_not receive(:write)
+        driver.parse("HTTP/1.1 403 Forbidden\r\n\r\n")
+        expect(@error.message).to eq "Can't establish a connection to the server at ws://www.example.com/socket"
+        expect(@close).to eq [1006, ""]
+        expect(driver.state).to eq :closed
+      end
+    end
+
     describe "with a valid response" do
       before { driver.parse(response) }
 
       it "changes the state to :open" do
-        @open.should == true
-        @close.should == false
-        driver.state.should == :open
+        expect(@open).to eq true
+        expect(@close).to eq false
+        expect(driver.state).to eq :open
       end
 
       it "makes the response status available" do
-        driver.status.should == 101
+        expect(driver.status).to eq 101
       end
 
       it "makes the response headers available" do
-        driver.headers["Upgrade"].should == "websocket"
+        expect(driver.headers["Upgrade"]).to eq "websocket"
       end
     end
 
@@ -138,13 +220,13 @@ describe WebSocket::Driver::Client do
       end
 
       it "changes the state to :open" do
-        @open.should == true
-        @close.should == false
-        driver.state.should == :open
+        expect(@open).to eq true
+        expect(@close).to eq false
+        expect(driver.state).to eq :open
       end
 
       it "parses the frame" do
-        @message.should == "Hi"
+        expect(@message).to eq "Hi"
       end
     end
 
@@ -155,10 +237,10 @@ describe WebSocket::Driver::Client do
       end
 
       it "changes the state to :closed" do
-        @open.should == false
-        @error.message.should == "Error during WebSocket handshake: Invalid HTTP response"
-        @close.should == [1002, "Error during WebSocket handshake: Invalid HTTP response"]
-        driver.state.should == :closed
+        expect(@open).to eq false
+        expect(@error.message).to eq "Error during WebSocket handshake: Invalid HTTP response"
+        expect(@close).to eq [1002, "Error during WebSocket handshake: Invalid HTTP response"]
+        expect(driver.state).to eq :closed
       end
     end
 
@@ -169,10 +251,10 @@ describe WebSocket::Driver::Client do
       end
 
       it "changes the state to :closed" do
-        @open.should == false
-        @error.message.should == "Error during WebSocket handshake: 'Upgrade' header value is not 'WebSocket'"
-        @close.should == [1002, "Error during WebSocket handshake: 'Upgrade' header value is not 'WebSocket'"]
-        driver.state.should == :closed
+        expect(@open).to eq false
+        expect(@error.message).to eq "Error during WebSocket handshake: 'Upgrade' header value is not 'WebSocket'"
+        expect(@close).to eq [1002, "Error during WebSocket handshake: 'Upgrade' header value is not 'WebSocket'"]
+        expect(driver.state).to eq :closed
       end
     end
  
@@ -183,10 +265,10 @@ describe WebSocket::Driver::Client do
       end
 
       it "changes the state to :closed" do
-        @open.should == false
-        @error.message.should == "Error during WebSocket handshake: Sec-WebSocket-Accept mismatch"
-        @close.should == [1002, "Error during WebSocket handshake: Sec-WebSocket-Accept mismatch"]
-        driver.state.should == :closed
+        expect(@open).to eq false
+        expect(@error.message).to eq "Error during WebSocket handshake: Sec-WebSocket-Accept mismatch"
+        expect(@close).to eq [1002, "Error during WebSocket handshake: Sec-WebSocket-Accept mismatch"]
+        expect(driver.state).to eq :closed
       end
     end
 
@@ -199,13 +281,13 @@ describe WebSocket::Driver::Client do
       end
 
       it "changes the state to :open" do
-        @open.should == true
-        @close.should == false
-        driver.state.should == :open
+        expect(@open).to eq true
+        expect(@close).to eq false
+        expect(driver.state).to eq :open
       end
 
       it "selects the subprotocol" do
-        driver.protocol.should == "xmpp"
+        expect(driver.protocol).to eq "xmpp"
       end
     end
 
@@ -218,16 +300,15 @@ describe WebSocket::Driver::Client do
       end
 
       it "changes the state to :closed" do
-        @open.should == false
-        @error.message.should == "Error during WebSocket handshake: Sec-WebSocket-Protocol mismatch"
-        @close.should == [1002, "Error during WebSocket handshake: Sec-WebSocket-Protocol mismatch"]
-        driver.state.should == :closed
+        expect(@open).to eq false
+        expect(@error.message).to eq "Error during WebSocket handshake: Sec-WebSocket-Protocol mismatch"
+        expect(@close).to eq [1002, "Error during WebSocket handshake: Sec-WebSocket-Protocol mismatch"]
+        expect(driver.state).to eq :closed
       end
 
       it "selects no subprotocol" do
-        driver.protocol.should == nil
+        expect(driver.protocol).to eq nil
       end
     end
   end
 end
-

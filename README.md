@@ -1,4 +1,4 @@
-# websocket-driver [![Build Status](https://travis-ci.org/faye/websocket-driver-ruby.png)](https://travis-ci.org/faye/websocket-driver-ruby)
+# websocket-driver [![Build Status](https://travis-ci.org/faye/websocket-driver-ruby.svg)](https://travis-ci.org/faye/websocket-driver-ruby)
 
 This module provides a complete implementation of the WebSocket protocols that
 can be hooked up to any TCP library. It aims to simplify things by decoupling
@@ -193,6 +193,23 @@ sent back by the server:
 * `driver.headers` - a hash-like object containing the response headers
 
 
+### HTTP Proxies
+
+The client driver supports connections via HTTP proxies using the `CONNECT`
+method. Instead of sending the WebSocket handshake immediately, it will send a
+`CONNECT` request, wait for a `200` response, and then proceed as normal. To use
+this feature, set the `:proxy` option to the HTTP origin of the proxy, including
+any authorization information.
+
+```rb
+driver = WebSocket::Driver.client(socket, :proxy => 'http://username:password@proxy.example.com')
+```
+
+It is up to you to set up a TCP connection to the proxy yourself. If you prefer,
+you can perform the `CONNECT` logic yourself and then hand off the TCP
+connection to the client driver to continue the handshake process.
+
+
 ### Driver API
 
 Drivers are created using one of the following methods:
@@ -212,6 +229,8 @@ enabled on outgoing frames.
 The `options` argument is optional, and is a hash. It may contain the following
 keys:
 
+* `:max_length` - the maximum allowed size of incoming message frames, in bytes.
+  The default value is `2^26 - 1`, or 1 byte short of 64 MiB.
 * `:protocols` - an array of strings representing acceptable subprotocols for
   use over the socket. The driver will negotiate one of these to use via the
   `Sec-WebSocket-Protocol` header if supported by the other peer.
@@ -306,7 +325,7 @@ after `emit('open')` has fired.
 
 (The MIT License)
 
-Copyright (c) 2010-2013 James Coglan
+Copyright (c) 2010-2014 James Coglan
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the 'Software'), to deal in
@@ -325,4 +344,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
